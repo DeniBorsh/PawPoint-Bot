@@ -2,6 +2,7 @@ import telebot
 from telebot import types
 import sqlite3
 import os
+import html
 
 TOKEN = ""
 MODERS_LIST = [0, # Contaro
@@ -54,25 +55,32 @@ def request_moderation(message):
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
-    try:
+    if not (message.from_user.id in photo_file_ids):
+        try:
+            file_info = bot.get_file(message.photo[-1].file_id)
 
-        file_info = bot.get_file(message.photo[-1].file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
 
-        downloaded_file = bot.download_file(file_info.file_path)
+            file_local_path = os.path.join("./data/photo", file_info.file_id + ".jpg")
+            with open(file_local_path, "wb") as new_file:
+                new_file.write(downloaded_file)
 
-        file_local_path = os.path.join("./data/photo", file_info.file_id + ".jpg")
-        with open(file_local_path, "wb") as new_file:
-            new_file.write(downloaded_file)
+            cursor.execute("INSERT INTO photos (user_id, file_id, file_path, status, username, description) VALUES (?, ?, ?, ?, ?, ?)",
+                        (message.from_user.id, file_info.file_id, file_local_path, "edit", "", ""))
+            conn.commit()
 
-        cursor.execute("INSERT INTO photos (user_id, file_id, file_path, status, username, description) VALUES (?, ?, ?, ?, ?, ?)",
-                       (message.from_user.id, file_info.file_id, file_local_path, "edit", "", ""))
-        conn.commit()
+            photo_file_ids[message.from_user.id] = file_info.file_id
 
-        photo_file_ids[message.from_user.id] = file_info.file_id
+            bot.send_message(message.chat.id, "Теперь отправьте местоположение уличного животного, а после, по желанию, описание")
+        except Exception as e:
+            bot.reply_to(message, "Произошла ошибка!")
+    else:
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        cancell_button = types.InlineKeyboardButton("Отменить", callback_data="cancell")
+        finish_button = types.InlineKeyboardButton("Дополнить", callback_data="finish")
+        markup.add(cancell_button, finish_button)
 
-        bot.send_message(message.chat.id, "Теперь отправьте местоположение уличного животного, а после, по желанию, описание")
-    except Exception as e:
-        bot.reply_to(message, "Произошла ошибка!")
+        bot.reply_to(message, "У вас имеется незавершенная публикация. Желаете ее дополнить или отменить?", reply_markup=markup)
 
 @bot.message_handler(content_types=['location'])
 def add_location(message):
@@ -85,14 +93,17 @@ def add_location(message):
                        (lat, lng, file_id))
         conn.commit()
 
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        no_button = types.InlineKeyboardButton("Нет", callback_data="username")
-        description_button = types.InlineKeyboardButton("Добавить описание", callback_data="add_description")
-        markup.add(no_button, description_button)
-
-        bot.reply_to(message, "Местоположение добавлено! Чтобы поменять местоположение, просто пришлите новое местоположение. Желаете добавить описание к фотографии?", reply_markup=markup)
+        location_description(message)
     else:
         bot.reply_to(message, "Пожалуйста, сначала отправьте фотографию.")
+
+def location_description(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    no_button = types.InlineKeyboardButton("Нет", callback_data="username")
+    description_button = types.InlineKeyboardButton("Добавить описание", callback_data="add_description")
+    markup.add(no_button, description_button)
+
+    bot.reply_to(message, "Местоположение добавлено! Чтобы поменять местоположение, просто пришлите новое местоположение. Желаете добавить описание к фотографии?", reply_markup=markup)
 
 def handle_done(user_id):
     if photo_file_ids.get(user_id):
@@ -119,6 +130,39 @@ def handle_urgency(message):
 
     bot.reply_to(message, "Если животное требует срочного внимание, нажмите на соответствующую кнопку. И, пожалуйста, не делайте этого, если срочного внимания не требуется", reply_markup=markup)
 
+def cancell_post(message):
+    user_id = message.from_user.id
+
+    if photo_file_ids.get(user_id):
+        file_id = photo_file_ids[user_id]
+    cursor.execute('DELETE FROM photos WHERE file_id = ?', (file_id,))
+    conn.commit()
+
+    if os.path.exists(f'{file_id}.jpg'):
+        os.remove(f'{file_id}.jpg')
+
+    del photo_file_ids[user_id]
+    bot.send_message(user_id, 'Публикация успешно отозвана. Для совершения новой публикации просто поделитель фотографией!')
+
+def finish_post(message):
+    user_id = message.from_user.id
+
+    if photo_file_ids.get(user_id):
+        file_id = photo_file_ids[user_id]
+    cursor.execute("SELECT file_path, description, lat, lng, username FROM photos WHERE file_id = ?", (file_id,))
+    requests = cursor.fetchone()
+    if requests:
+        file_path, description, lat, lng, username = requests
+        if lat is None:
+            bot.send_message(user_id, "Теперь отправьте местоположение уличного животного, а после, по желанию, описание")
+        elif description == "":
+            location_description(message)
+        elif username == "":
+            handle_username(message)
+        else:
+            handle_urgency()
+
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     if call.data == "done":
@@ -140,7 +184,8 @@ def callback_query(call):
         delay_button = types.InlineKeyboardButton("⏰ Отложить", callback_data=f"delay_{request_id}")
         markup.add(accept_button, reject_button, delay_button)
         for id in MODERS_LIST:
-            bot.send_photo(chat_id=id, photo=open(file_path, 'rb'), caption=f"Описание: {description}\nМестоположение: {lat}, {lng}", reply_markup=markup)
+            google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
+            bot.send_photo(chat_id=id, photo=open(file_path, 'rb'), caption=f"Автор: {call.from_user.username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup)
     elif call.data == "add_link":
         file_id = photo_file_ids[call.from_user.id]
         cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (f"@{call.from_user.username}", file_id))
@@ -155,6 +200,10 @@ def callback_query(call):
         handle_urgency(call.message)
     elif call.data == "username":
         handle_username(call.message)
+    elif call.data == "cancell":
+        cancell_post(call.message)
+    elif call.data == "finish":
+        finish_post(call.message)
     else:
         action, request_id = call.data.split('_')
         cursor.execute("SELECT status FROM photos WHERE id = ?", (request_id,))
@@ -192,12 +241,12 @@ def callback_query(call):
             bot.send_message(call.message.chat.id, "Этот пост уже обработан другим модератором")
 
         moderate(call.from_user.id)
-    bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None)
+    bot.delete_message(call.message.chat.id, call.message.message_id)
 
 
 def add_description(message, file_id):
-    cursor.execute('UPDATE photos SET description = ? WHERE file_id = ?', (message.text, file_id))
-    conn.commit()        
+    cursor.execute('UPDATE photos SET description = ? WHERE file_id = ?', (extract_formatted_text(message), file_id))
+    conn.commit()
     bot.reply_to(message, "Описание добавлено")
     handle_username(message)
 
@@ -209,18 +258,20 @@ def moderate(user_id):
     global moderation_queue
     if user_id in MODERS_LIST:
         if not moderation_queue:
-            cursor.execute("SELECT id, file_path, description, lat, lng FROM photos WHERE status = 'new' OR status = 'delayed'")
+            cursor.execute("SELECT id, user_id, file_path, description, lat, lng FROM photos WHERE status = 'new' OR status = 'delayed'")
             moderation_queue = cursor.fetchall()
 
         if moderation_queue:
             request = moderation_queue.pop(0)
-            request_id, file_path, description, lat, lng = request
+            request_id, uid, file_path, description, lat, lng = request
             markup = types.InlineKeyboardMarkup(row_width=3)
             accept_button = types.InlineKeyboardButton("✅ Принять", callback_data=f"accept_{request_id}")
             reject_button = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{request_id}")
             delay_button = types.InlineKeyboardButton("⏰ Отложить", callback_data=f"delay_{request_id}")
             markup.add(accept_button, reject_button, delay_button)
-            bot.send_photo(chat_id=user_id, photo=open(file_path, 'rb'), caption=f"Описание: {description}\nМестоположение: {lat}, {lng}", reply_markup=markup)
+
+            google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
+            bot.send_photo(chat_id=id, photo=open(file_path, 'rb'), caption=f"Автор: {get_username(uid)}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup)
         else:
             bot.send_message(user_id, "Нет постов, ожидающих модерации.")
     else:
@@ -230,7 +281,7 @@ def moderate(user_id):
 def cleanup(message):
     user_id = message.from_user.id
     if user_id in MODERS_LIST:
-        cursor.execute("SELECT id, file_path FROM photos WHERE status in ('rejected', 'edit')")
+        cursor.execute("SELECT id, file_path FROM photos WHERE status = 'rejected'")
         entries_to_delete = cursor.fetchall()
 
         for entry in entries_to_delete:
@@ -263,5 +314,43 @@ def get_info(message):
         bot.send_message(user_id, f"Новые публикации: {len(new_posts)}\nПринятые: {len(accepted_posts)}\nОтклоненные: {len(rejected_posts)}\nОтложенные: {len(delayed_posts)}\nЕще не готовые: {len(editing_posts)}\n")
     else:
         bot.send_message(user_id, "У вас нет прав для выполнения этой команды.")
+
+
+
+def extract_formatted_text(message):
+    text = message.text
+    result = ""
+    last_offset = 0
+
+    for entity in sorted(message.entities, key=lambda e: e.offset):
+        start = entity.offset
+        end = entity.offset + entity.length
+        entity_text = html.escape(text[start:end])
+
+        if entity.type == "bold":
+            formatted_text = f"<b>{entity_text}</b>"
+        elif entity.type == "italic":
+            formatted_text = f"<i>{entity_text}</i>"
+        elif entity.type == "code":
+            formatted_text = f"<code>{entity_text}</code>"
+        elif entity.type == "url":
+            formatted_text = f"<a href='{entity_text}'>{entity_text}</a>"
+        # Добавьте здесь обработку других типов, если это необходимо
+        else:
+            formatted_text = entity_text
+
+        result += text[last_offset:start] + formatted_text
+        last_offset = end
+
+    result += text[last_offset:]  # Добавляем оставшийся текст
+    return result
+
+def get_username(user_id):
+    try:
+        chat_info = bot.get_chat(user_id)
+        return chat_info.username  # Возвращаем username пользователя
+    except Exception as e:
+        print(f"Ошибка: {e}")
+        return None
 
 bot.polling(none_stop=True)
