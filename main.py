@@ -1,14 +1,13 @@
 import telebot
 from telebot import types
 import sqlite3
-import os
-import html
 
 TOKEN = ""
 MODERS_LIST = [0, # Contaro
                0, # Тамерлан
                0, # Асхаб
-               0] # Седа
+               0, # Седа
+               0] # wirotenshi
 CONTARO = 0
 CHANNEL_ID = '@pawpoint'
 moderation_queue = []
@@ -39,20 +38,6 @@ def onstart(message):
     else:
         greeting = f"Привет, {message.from_user.first_name}! Если вы хотите поделиться фотографией уличного животного, то я жду!"
         bot.send_message(message.chat.id, greeting)
-
-@bot.message_handler(func=lambda message: True)
-def text_handler(message):
-    if message.text == "🛡️ Модерация":
-        moderate_command(message)
-    elif message.text == "🗑️ Очистить фотографии":
-        cleanup(message)
-    elif message.text == "📝 Информация о БД":
-        get_info(message)
-    else:
-        if photo_file_ids.get(message.from_user.id):
-            bot.send_message(message.chat.id, "Пришлите местоположение в виде геоданных")
-        else:
-            bot.send_message(message.chat.id, "Сначала пришлите фотографию")
 
 @bot.message_handler(commands=['reqmoder'])
 def request_moderation(message):
@@ -178,9 +163,13 @@ def callback_query(call):
         reject_button = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{request_id}")
         delay_button = types.InlineKeyboardButton("⏰ Отложить", callback_data=f"delay_{request_id}")
         markup.add(accept_button, reject_button, delay_button)
+        if call.from_user.username:
+            username = f"@{call.from_user.username}"
+        else:
+            username = call.from_user.first_name
         for id in MODERS_LIST:
             google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
-            bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: @{call.from_user.username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
+            bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: {username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
     elif call.data == "add_link":
         file_id = photo_file_ids[call.from_user.id]
         cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (f"@{call.from_user.username}", file_id))
@@ -272,7 +261,7 @@ def moderate(user_id):
             markup.add(accept_button, reject_button, delay_button)
 
             google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
-            bot.send_photo(chat_id=user_id, photo=file_id, caption=f"Автор: @{get_username(uid)}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
+            bot.send_photo(chat_id=user_id, photo=file_id, caption=f"Автор: {get_username(uid)}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
         else:
             bot.send_message(user_id, "Нет постов, ожидающих модерации.")
     else:
@@ -297,11 +286,15 @@ def get_info(message):
     else:
         bot.send_message(user_id, "У вас нет прав для выполнения этой команды.")
 
+@bot.message_handler(commands=['forcontaroonly'])
+def for_contaro_only(message):
+    pass
+
 @bot.message_handler(commands=['cleanup'])
 def cleanup(message):
     user_id = message.from_user.id
     if user_id in MODERS_LIST:
-        cursor.execute("UPDATE photos SET status = 'deleted' WHERE status = 'edit'") 
+        cursor.execute("UPDATE photos SET status = 'deleted' WHERE status = 'edit'")
         conn.commit()
         bot.send_message(user_id, "Очистка успешно завершена")
     else:
@@ -310,9 +303,26 @@ def cleanup(message):
 def get_username(user_id):
     try:
         chat_info = bot.get_chat(user_id)
-        return chat_info.username  # Возвращаем username пользователя
+        if chat_info.username:
+            return f"@{chat_info.username}"
+        else:
+            return chat_info.first_name
+        # Возвращаем username пользователя
     except Exception as e:
-        print(f"Ошибка: {e}")
-        return None
+        return ""
+
+@bot.message_handler(func=lambda message: True)
+def text_handler(message):
+    if message.text == "🛡️ Модерация":
+        moderate_command(message)
+    elif message.text == "🗑️ Очистить фотографии":
+        cleanup(message)
+    elif message.text == "📝 Информация о БД":
+        get_info(message)
+    else:
+        if photo_file_ids.get(message.from_user.id):
+            bot.send_message(message.chat.id, "Пришлите местоположение в виде геоданных. Если уже присылали - то продолжите навигацию по кнопкам, пожалуйста)")
+        else:
+            bot.send_message(message.chat.id, "Сначала пришлите фотографию")
 
 bot.polling(none_stop=True)
