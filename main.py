@@ -29,7 +29,7 @@ def onstart(message):
     if user_id in MODERS_LIST:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         moderate_button = types.KeyboardButton("🛡️ Модерация")
-        cleanup_button = types.KeyboardButton("🗑️ Очистить фотографии")
+        cleanup_button = types.KeyboardButton("🗑️ Очистить мусор")
         info_button = types.KeyboardButton("📝 Информация о БД")
         markup.row(moderate_button, cleanup_button)
         markup.row(info_button)
@@ -60,8 +60,8 @@ def handle_photo(message):
             bot.reply_to(message, "Произошла ошибка!")
     else:
         markup = types.InlineKeyboardMarkup(row_width=2)
-        cancell_button = types.InlineKeyboardButton("Отменить", callback_data="cancell")
-        finish_button = types.InlineKeyboardButton("Дополнить", callback_data="finish")
+        cancell_button = types.InlineKeyboardButton("❌ Отменить", callback_data="cancell")
+        finish_button = types.InlineKeyboardButton("➡️ Дополнить", callback_data="finish")
         markup.add(cancell_button, finish_button)
 
         bot.send_message(message.chat.id, "У вас имеется незавершенная публикация. Желаете ее дополнить или отменить?", reply_markup=markup)
@@ -83,8 +83,8 @@ def add_location(message):
 
 def location_description(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    no_button = types.InlineKeyboardButton("Нет", callback_data="username")
-    description_button = types.InlineKeyboardButton("Добавить описание", callback_data="add_description")
+    no_button = types.InlineKeyboardButton("❌ Нет", callback_data="username")
+    description_button = types.InlineKeyboardButton("✍🏻 Добавить описание", callback_data="add_description")
     markup.add(no_button, description_button)
 
     bot.send_message(chat_id, "Местоположение добавлено! Чтобы поменять местоположение, просто пришлите новое местоположение. Желаете добавить описание к фотографии?", reply_markup=markup)
@@ -100,16 +100,16 @@ def handle_done(user_id):
 
 def handle_username(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=3)
-    no_button = types.InlineKeyboardButton("Нет", callback_data="add_nothing")
-    link_button = types.InlineKeyboardButton("Ссылка", callback_data="add_link")
-    first_name_button = types.InlineKeyboardButton("Имя", callback_data="add_first_name")
+    no_button = types.InlineKeyboardButton("❌ Нет", callback_data="add_nothing")
+    link_button = types.InlineKeyboardButton("🔗 Ссылка", callback_data="add_link")
+    first_name_button = types.InlineKeyboardButton("🗿 Имя", callback_data="add_first_name")
     markup.add(no_button, link_button, first_name_button)
 
     bot.send_message(chat_id, "Хотите ли вы, чтобы в посте отображалось ваше имя либо ссылка на ваш профиль?", reply_markup=markup)
 
 def handle_urgency(chat_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    done_button = types.InlineKeyboardButton("Завершить", callback_data="done")
+    done_button = types.InlineKeyboardButton("✅ Завершить", callback_data="done")
     urgently_button = types.InlineKeyboardButton("❗️ Срочно", callback_data="urgency")
     markup.add(done_button, urgently_button)
 
@@ -172,7 +172,11 @@ def callback_query(call):
             bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: {username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
     elif call.data == "add_link":
         file_id = photo_file_ids[call.from_user.id]
-        cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (f"@{call.from_user.username}", file_id))
+        if call.from_user.username:
+            username = f"@{call.from_user.username}"
+        else:
+            username = call.from_user.first_name
+        cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (username, file_id))
         conn.commit()
         handle_urgency(call.from_user.id)
     elif call.data == "add_first_name":
@@ -307,7 +311,6 @@ def get_username(user_id):
             return f"@{chat_info.username}"
         else:
             return chat_info.first_name
-        # Возвращаем username пользователя
     except Exception as e:
         return ""
 
@@ -315,7 +318,7 @@ def get_username(user_id):
 def text_handler(message):
     if message.text == "🛡️ Модерация":
         moderate_command(message)
-    elif message.text == "🗑️ Очистить фотографии":
+    elif message.text == "🗑️ Очистить мусор":
         cleanup(message)
     elif message.text == "📝 Информация о БД":
         get_info(message)
