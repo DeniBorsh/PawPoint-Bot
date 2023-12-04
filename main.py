@@ -40,7 +40,7 @@ def onstart(message):
         greeting = f"Привет, {message.from_user.first_name}! Если вы хотите поделиться фотографией уличного животного, то я жду!"
         bot.send_message(message.chat.id, greeting)
 
-@bot.message_handler(func=lambda message: message.text in ["🛡️ Модерация", "🗑️ Очистить фотографии", "📝 Информация о БД"])
+@bot.message_handler(func=lambda message: True)
 def text_handler(message):
     if message.text == "🛡️ Модерация":
         moderate_command(message)
@@ -48,6 +48,11 @@ def text_handler(message):
         cleanup(message)
     elif message.text == "📝 Информация о БД":
         get_info(message)
+    else:
+        if photo_file_ids.get(message.from_user.id):
+            bot.send_message(message.chat.id, "Пришлите местоположение в виде геоданных")
+        else:
+            bot.send_message(message.chat.id, "Сначала пришлите фотографию")
 
 @bot.message_handler(commands=['reqmoder'])
 def request_moderation(message):
@@ -175,7 +180,7 @@ def callback_query(call):
         markup.add(accept_button, reject_button, delay_button)
         for id in MODERS_LIST:
             google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
-            bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: {call.from_user.username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup)
+            bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: @{call.from_user.username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
     elif call.data == "add_link":
         file_id = photo_file_ids[call.from_user.id]
         cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (f"@{call.from_user.username}", file_id))
