@@ -143,92 +143,98 @@ def finish_post(chat_id):
             handle_urgency(chat_id)
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('accept_') or call.data.startswith('reject_') or call.data.startswith('delay_'))
+def callback_query(call):
+    action, request_id = call.data.split('_')
+    cursor.execute("SELECT status FROM photos WHERE id = ?", (request_id,))
+    result = cursor.fetchone()
+    if result and result[0] in ['new', 'delayed']:
+        if action == 'accept':
+            cursor.execute("UPDATE photos SET status = 'accepted' WHERE id = ?", (request_id,))
+            conn.commit()
+
+            cursor.execute("SELECT file_id, description, lat, lng, username FROM photos WHERE id = ?", (request_id,))
+            photo_info = cursor.fetchone()
+
+            if photo_info:
+                file_id, description, lat, lng, username = photo_info
+                if len(description) > 0:
+                    description = f"Комментарий автора: {description}\n"
+
+                if len(username) > 0:
+                    username = f"Автор: {username}\n"
+
+                google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
+                message_text = f"{username}{description}[Местоположение]({google_maps_url})"
+
+                bot.send_photo(CHANNEL_ID, file_id, caption=message_text, parse_mode='Markdown')
+
+        elif action == 'reject':
+            cursor.execute("UPDATE photos SET status = 'rejected' WHERE id = ?", (request_id,))
+        elif action == 'delay':
+            cursor.execute("UPDATE photos SET status = 'delayed' WHERE id = ?", (request_id,))
+        conn.commit()
+        bot.answer_callback_query(call.id, f"Заявка {action} для файла {request_id}")
+    else:
+        bot.answer_callback_query(call.id, "Этот пост уже обработан другим модератором.")
+        bot.send_message(call.message.chat.id, "Этот пост уже обработан другим модератором")
+
+    moderate(call.from_user.id)
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    if call.data == "done":
-        handle_done(call.from_user.id)
-    elif call.data == "add_description":
-        bot.send_message(call.message.chat.id, 'Напишите описание для фотографии. Если вы передумали, пришлите точку')
-        bot.register_next_step_handler(call.message, add_description, photo_file_ids.get(call.from_user.id))
-    elif call.data == "urgency":
-        file_id = photo_file_ids[call.from_user.id]
-        handle_done(call.from_user.id)
+    user_id = call.from_user.id
+    file_id = photo_file_ids.get(user_id)
+    data = call.data
 
-        cursor.execute("SELECT id, description, lat, lng FROM photos WHERE status = 'new' OR status = 'delayed' AND file_id = ?", (file_id,))
-        requests = cursor.fetchall()
-
-        request_id, description, lat, lng = requests[0]
-        markup = types.InlineKeyboardMarkup(row_width=3)
-        accept_button = types.InlineKeyboardButton("✅ Принять", callback_data=f"accept_{request_id}")
-        reject_button = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{request_id}")
-        delay_button = types.InlineKeyboardButton("⏰ Отложить", callback_data=f"delay_{request_id}")
-        markup.add(accept_button, reject_button, delay_button)
-        if call.from_user.username:
-            username = f"@{call.from_user.username}"
-        else:
-            username = call.from_user.first_name
-        for id in MODERS_LIST:
-            google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
-            bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: {username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
-    elif call.data == "add_link":
-        file_id = photo_file_ids[call.from_user.id]
-        if call.from_user.username:
-            username = f"@{call.from_user.username}"
-        else:
-            username = call.from_user.first_name
-        cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (username, file_id))
-        conn.commit()
-        handle_urgency(call.from_user.id)
-    elif call.data == "add_first_name":
-        file_id = photo_file_ids[call.from_user.id]
-        cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (f"{call.from_user.first_name}", file_id))
-        conn.commit()
-        handle_urgency(call.from_user.id)
-    elif call.data == "add_nothing":
-        handle_urgency(call.from_user.id)
-    elif call.data == "username":
-        handle_username(call.from_user.id)
-    elif call.data == "cancell":
-        cancell_post(call.from_user.id)
-    elif call.data == "finish":
-        finish_post(call.from_user.id)
+    if call.from_user.username:
+        username = f"@{call.from_user.username}"
     else:
-        action, request_id = call.data.split('_')
-        cursor.execute("SELECT status FROM photos WHERE id = ?", (request_id,))
-        result = cursor.fetchone()
-        if result and result[0] in ['new', 'delayed']:
-            if action == 'accept':
-                cursor.execute("UPDATE photos SET status = 'accepted' WHERE id = ?", (request_id,))
-                conn.commit()
+        username = call.from_user.first_name
 
-                cursor.execute("SELECT file_id, description, lat, lng, username FROM photos WHERE id = ?", (request_id,))
-                photo_info = cursor.fetchone()
+    if file_id:
+        if data == "done":
+            handle_done(user_id)
+        elif data == "add_description":
+            bot.send_message(user_id, 'Напишите описание для фотографии. Если вы передумали, пришлите точку')
+            bot.register_next_step_handler(call.message, add_description, file_id)
+        elif data == "urgency":
+            handle_done(user_id)
 
-                if photo_info:
-                    file_id, description, lat, lng, username = photo_info
-                    if len(description) > 0:
-                        description = f"Комментарий автора: {description}\n"
+            cursor.execute("SELECT id, description, lat, lng FROM photos WHERE status = 'new' OR status = 'delayed' AND file_id = ?", (file_id,))
+            requests = cursor.fetchall()
 
-                    if len(username) > 0:
-                        username = f"Автор: {username}\n"
+            request_id, description, lat, lng = requests[0]
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            accept_button = types.InlineKeyboardButton("✅ Принять", callback_data=f"accept_{request_id}")
+            reject_button = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{request_id}")
+            delay_button = types.InlineKeyboardButton("⏰ Отложить", callback_data=f"delay_{request_id}")
+            markup.add(accept_button, reject_button, delay_button)
 
-                    google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
-                    message_text = f"{username}{description}[Местоположение]({google_maps_url})"
-
-                    bot.send_photo(CHANNEL_ID, file_id, caption=message_text, parse_mode='Markdown')
-
-            elif action == 'reject':
-                cursor.execute("UPDATE photos SET status = 'rejected' WHERE id = ?", (request_id,))
-            elif action == 'delay':
-                cursor.execute("UPDATE photos SET status = 'delayed' WHERE id = ?", (request_id,))
+            for id in MODERS_LIST:
+                google_maps_url = f"https://www.google.com/maps/place/{lat},{lng}"
+                bot.send_photo(chat_id=id, photo=file_id, caption=f"Автор: {username}\nОписание: {description}\n[Местоположение]({google_maps_url})", reply_markup=markup, parse_mode='Markdown')
+        elif data == "add_link":
+            cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (username, file_id))
             conn.commit()
-            bot.answer_callback_query(call.id, f"Заявка {action} для файла {request_id}")
-        else:
-            bot.answer_callback_query(call.id, "Этот пост уже обработан другим модератором.")
-            bot.send_message(call.message.chat.id, "Этот пост уже обработан другим модератором")
+            handle_urgency(user_id)
+        elif data == "add_first_name":
+            cursor.execute('UPDATE photos SET username = ? WHERE file_id = ?', (f"{call.from_user.first_name}", file_id))
+            conn.commit()
+            handle_urgency(user_id)
+        elif data == "add_nothing":
+            handle_urgency(user_id)
+        elif data == "username":
+            handle_username(user_id)
+        elif data == "cancell":
+            cancell_post(user_id)
+        elif data == "finish":
+            finish_post(user_id)
+    else:
+        bot.send_message("Сначала загрузите фотографию")
 
-        moderate(call.from_user.id)
-    bot.delete_message(call.message.chat.id, call.message.message_id)
+    if call.message:
+        bot.delete_message(user_id, call.message.message_id)
 
 
 def add_description(message, file_id):
